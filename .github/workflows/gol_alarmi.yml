@@ -1,0 +1,61 @@
+name: Gol Alarmi
+
+# Her calisma ~5 saat 40 dk boyunca dakikada bir maclari tarar,
+# bitince kendini yeniden baslatir (zincir). Cron sadece yedek:
+# zincir bir sekilde koparsa 6 saatte bir tekrar baslatir.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 */6 * * *"
+
+# Ayni anda tek kopya calissin
+concurrency:
+  group: gol-alarmi
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  tara:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Daha once bildirilen maclari hatirla (ayni maca 2 kez mesaj gitmesin)
+      - name: Gonderilenler listesini geri yukle
+        uses: actions/cache/restore@v4
+        with:
+          path: sent.json
+          key: sent-${{ github.run_id }}
+          restore-keys: sent-
+
+      - name: Maclari tara
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LOOP_MINUTES: "340"
+          POLL_SECONDS: "60"
+          GOL_ESIGI: "2"
+          DAKIKA_SINIRI: "20"
+        run: python gol_alarmi.py
+
+      - name: Gonderilenler listesini kaydet
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: sent.json
+          key: sent-${{ github.run_id }}
+
+      # Sadece basarili calismadan sonra (token eksikse sonsuz dongu olmasin)
+      - name: Zinciri devam ettir
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run gol_alarmi.yml --ref ${{ github.ref_name }}
