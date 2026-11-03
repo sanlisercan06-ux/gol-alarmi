@@ -22,7 +22,8 @@ import time
 import urllib.parse
 import urllib.request
 
-ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
+# limit olmadan ESPN en fazla 100 mac dondurur, yogun gunlerde maclar kacar
+ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?limit=1000"
 LEAGUES_URL = "https://site.api.espn.com/apis/site/v2/leagues/dropdown?sport=soccer&limit=1000"
 SENT_FILE =os.path.join(os.path.dirname(os.path.abspath(__file__)), "sent.json")
 
