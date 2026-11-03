@@ -162,6 +162,9 @@ def tur(sent):
 def main():
     if not TOKEN or not CHAT_ID:
         sys.exit("TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID gerekli")
+    if os.environ.get("TEST_MESAJI") == "true":
+        ok = telegram_gonder("✅ Gol Alarmı çalışıyor (test mesajı)")
+        log(f"Test mesaji: {'gonderildi' if ok else 'HATA'}")
     sent = sent_yukle()
     ligleri_yukle()
     bitis = time.time() + LOOP_MINUTES * 60

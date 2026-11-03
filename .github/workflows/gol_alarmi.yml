@@ -5,6 +5,11 @@ name: Gol Alarmi
 # zincir bir sekilde koparsa 6 saatte bir tekrar baslatir.
 on:
   workflow_dispatch:
+    inputs:
+      test:
+        description: "Baslarken Telegram'a test mesaji gonder"
+        type: boolean
+        default: false
   schedule:
     - cron: "7 */6 * * *"
 
@@ -44,6 +49,7 @@ jobs:
           POLL_SECONDS: "60"
           GOL_ESIGI: "2"
           DAKIKA_SINIRI: "20"
+          TEST_MESAJI: ${{ inputs.test }}
         run: python gol_alarmi.py
 
       - name: Gonderilenler listesini kaydet
