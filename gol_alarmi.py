@@ -120,15 +120,33 @@ def erken_goller(event):
     return sorted(goller)
 
 
+def toplam_skor(event):
+    return sum(int(c.get("score") or 0) for c in event["competitions"][0]["competitors"])
+
+
+def skorla_erken_mi(event):
+    """Yedek kontrol: ESPN'in gol dakikasi vermedigi maclarda skor + mac saatine bakar."""
+    comp = event["competitions"][0]
+    if any(d.get("scoringPlay") for d in comp.get("details", [])):
+        return False
+    status = event["status"]
+    m = re.match(r"(\d+)", status.get("displayClock", ""))
+    # Saat 0 ise ESPN bu macin saatini tutmuyordur, yanlis alarm vermesin
+    if not m or status.get("period") != 1:
+        return False
+    return 1 <= int(m.group(1)) <= DAKIKA_SINIRI and toplam_skor(event) >= GOL_ESIGI
+
+
 def mesaj_olustur(event, goller):
     comp = event["competitions"][0]
     ev = next(c for c in comp["competitors"] if c["homeAway"] == "home")
     dep = next(c for c in comp["competitors"] if c["homeAway"] == "away")
     dakika = event["status"].get("displayClock", "")
-    gol_satiri = ", ".join(f"{dk}' {t}" for dk, t in goller)
+    gol_sayisi = len(goller) or toplam_skor(event)
+    gol_satiri = ", ".join(f"{dk}' {t}" for dk, t in goller) or "Gol dakikaları bilinmiyor (skor ve maç saatine göre)"
     link = next((l["href"] for l in event.get("links", []) if "summary" in l.get("rel", [])), "")
     return (
-        f"⚽ İLK {DAKIKA_SINIRI} DK'DA {len(goller)} GOL!\n"
+        f"⚽ İLK {DAKIKA_SINIRI} DK'DA {gol_sayisi} GOL!\n"
         f"🏆 {lig_adi(event)}\n"
         f"{ev['team']['displayName']} {ev['score']} - {dep['score']} {dep['team']['displayName']}\n"
         f"🥅 {gol_satiri}\n"
@@ -140,15 +158,23 @@ def mesaj_olustur(event, goller):
 def tur(sent):
     data = http_get_json(ESPN_URL)
     canli = 0
+    kayitsiz = 0  # golu olup gol kaydi olmayan canli mac
+    kayitsiz_saatli = 0  # bunlardan mac saati gelenler (yedek kontrol bunlarda calisir)
     for event in data.get("events", []):
         if event.get("status", {}).get("type", {}).get("state") != "in":
             continue
         canli += 1
+        details = event["competitions"][0].get("details", [])
+        if toplam_skor(event) > 0 and not any(d.get("scoringPlay") for d in details):
+            kayitsiz += 1
+            m = re.match(r"(\d+)", event["status"].get("displayClock", ""))
+            if m and int(m.group(1)) > 0:
+                kayitsiz_saatli += 1
         eid = event["id"]
         if eid in sent:
             continue
         goller = erken_goller(event)
-        if len(goller) >= GOL_ESIGI:
+        if len(goller) >= GOL_ESIGI or skorla_erken_mi(event):
             metin = mesaj_olustur(event, goller)
             if telegram_gonder(metin):
                 sent[eid] = time.time()
@@ -156,7 +182,7 @@ def tur(sent):
                 log(f"BİLDİRİM: {event['name']}")
             else:
                 log(f"Telegram hatasi: {event['name']}")
-    log(f"{canli} canli mac tarandi")
+    log(f"{canli} canli mac tarandi (gol kaydi olmayan: {kayitsiz}, saati gelen: {kayitsiz_saatli})")
     return sent
 
 

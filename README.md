@@ -6,6 +6,7 @@ Dünyadaki bütün liglerde (ESPN'nin kapsadığı ~220 lig) **ilk 20 dakikada 2
 - `gol_alarmi.py` dakikada bir ESPN'nin açık skor servisinden canlı maçları çeker.
 - Gol dakikalarına bakar: 20' veya öncesinde atılan gol sayısı 2'ye ulaştıysa mesaj atar.
 - Kontrol geç kalsa bile (ör. 25. dakikada bakılsa) gol dakikalarına baktığı için kaçırmaz.
+- ESPN'in gol dakikası vermediği maçlarda yedek kontrol çalışır: ilk yarıda, maç saati 1-20 arasındayken toplam skor 2 veya üstüyse bildirir. Bu yöntemde geç gelen skor kaçabilir, saati gelmeyen maçlar bildirilmez.
 - GitHub Actions'ta ~5 saat 40 dk çalışır, sonra kendini yeniden başlatır. Böylece 7/24 açık kalır.
 
 ## Ayarlar (workflow `env` kısmı)
