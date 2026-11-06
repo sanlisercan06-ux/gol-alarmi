@@ -1,11 +1,12 @@
 """
 Gol Alarmi - Ilk 20 dakikada 2+ gol olan maclari Telegram'a bildirir.
 
-Veri: ESPN acik skor servisi (anahtar gerekmez, tum ligler tek istekte).
+Veri: API-Football canli maclar (fixtures?live=all, tek istekte tum ligler).
 Calisma: LOOP_MINUTES boyunca her POLL_SECONDS saniyede bir kontrol eder.
 Ayni mac icin bir kez bildirim gonderir (sent.json'da saklanir).
 
 Ortam degiskenleri:
+  API_FOOTBALL_KEY    (zorunlu)
   TELEGRAM_BOT_TOKEN  (zorunlu)
   TELEGRAM_CHAT_ID    (zorunlu)
   LOOP_MINUTES        (varsayilan 340 = ~5 saat 40 dk; 0 = tek tur)
@@ -16,33 +17,39 @@ Ortam degiskenleri:
 
 import json
 import os
-import re
 import sys
 import time
 import urllib.parse
 import urllib.request
 
-# limit olmadan ESPN en fazla 100 mac dondurur, yogun gunlerde maclar kacar
-ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?limit=1000"
-LEAGUES_URL = "https://site.api.espn.com/apis/site/v2/leagues/dropdown?sport=soccer&limit=1000"
-SENT_FILE =os.path.join(os.path.dirname(os.path.abspath(__file__)), "sent.json")
+API_URL = "https://v3.football.api-sports.io/"
+SENT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sent.json")
 
+API_KEY = os.environ.get("API_FOOTBALL_KEY", "")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LOOP_MINUTES = int(os.environ.get("LOOP_MINUTES", "340"))
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "60"))
 GOL_ESIGI = int(os.environ.get("GOL_ESIGI", "2"))
 DAKIKA_SINIRI = int(os.environ.get("DAKIKA_SINIRI", "20"))
+UYARI_TUR = 30  # bu kadar tur ust uste hata olursa Telegram'a haber ver
 
 
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
-def http_get_json(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "gol-alarmi/1.0"})
+def api_get(yol, **param):
+    url = API_URL + yol
+    if param:
+        url += "?" + urllib.parse.urlencode(param)
+    req = urllib.request.Request(url, headers={"x-apisports-key": API_KEY})
     with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read().decode("utf-8"))
+        data = json.loads(r.read().decode("utf-8"))
+    # Kota veya plan sorununda bos liste de gelir, "mac yok" sanilmasin
+    if data.get("errors"):
+        raise RuntimeError(f"API hatasi: {data['errors']}")
+    return data
 
 
 def telegram_gonder(metin):
@@ -73,133 +80,101 @@ def sent_kaydet(sent):
     return sent
 
 
-def gol_dakikasi(detay):
-    """ "16'" -> 16, "45'+2'" -> 45. Okunamazsa clock.value'dan hesapla."""
-    clock = detay.get("clock", {})
-    m = re.match(r"(\d+)", clock.get("displayValue", ""))
-    if m:
-        return int(m.group(1))
-    return int(clock.get("value", 99999) // 60) + 1
-
-
-LIGLER = {}  # ESPN lig id -> lig adi
-
-
-def ligleri_yukle():
-    try:
-        data = http_get_json(LEAGUES_URL)
-        LIGLER.update({l["id"]: l["name"] for l in data.get("leagues", [])})
-        log(f"{len(LIGLER)} lig yuklendi")
-    except Exception as e:
-        log(f"Lig listesi alinamadi: {e}")
-
-
-def lig_adi(event):
-    m = re.search(r"~l:(\d+)", event.get("uid", ""))
-    if m and m.group(1) in LIGLER:
-        return LIGLER[m.group(1)]
-    slug = event.get("season", {}).get("slug", "")
-    # "2026-27-english-premier-league" -> "English Premier League"
-    slug = re.sub(r"^\d{4}(-\d{2,4})?-", "", slug)
-    return slug.replace("-", " ").title() or "Bilinmeyen lig"
-
-
-def erken_goller(event):
-    comp = event["competitions"][0]
-    takimlar = {c["team"]["id"]: c["team"]["displayName"] for c in comp["competitors"]}
+def erken_goller(mac):
     goller = []
-    for d in comp.get("details", []):
-        if not d.get("scoringPlay") or d.get("shootout"):
+    for e in mac.get("events") or []:
+        if e.get("type") != "Goal" or e.get("detail") == "Missed Penalty":
             continue
-        dk = gol_dakikasi(d)
-        if dk <= DAKIKA_SINIRI:
-            takim = takimlar.get(d.get("team", {}).get("id"), "?")
-            if d.get("ownGoal"):
-                takim += " (kk)"
-            goller.append((dk, takim))
+        dk = (e.get("time") or {}).get("elapsed")
+        if dk is None or dk > DAKIKA_SINIRI:
+            continue
+        takim = (e.get("team") or {}).get("name") or "?"
+        if e.get("detail") == "Own Goal":
+            takim += " (kk)"
+        goller.append((dk, takim))
     return sorted(goller)
 
 
-def toplam_skor(event):
-    return sum(int(c.get("score") or 0) for c in event["competitions"][0]["competitors"])
+def toplam_skor(mac):
+    g = mac.get("goals") or {}
+    return (g.get("home") or 0) + (g.get("away") or 0)
 
 
-def skorla_erken_mi(event):
-    """Yedek kontrol: ESPN'in gol dakikasi vermedigi maclarda skor + mac saatine bakar."""
-    comp = event["competitions"][0]
-    if any(d.get("scoringPlay") for d in comp.get("details", [])):
-        return False
-    status = event["status"]
-    m = re.match(r"(\d+)", status.get("displayClock", ""))
-    # Saat 0 ise ESPN bu macin saatini tutmuyordur, yanlis alarm vermesin
-    if not m or status.get("period") != 1:
-        return False
-    return 1 <= int(m.group(1)) <= DAKIKA_SINIRI and toplam_skor(event) >= GOL_ESIGI
+def skorla_erken_mi(mac):
+    """Gol kaydi gecikse de ilk yarida saat 1-20 ve skor yeterliyse kural saglanmistir."""
+    durum = mac["fixture"]["status"]
+    dk = durum.get("elapsed")
+    return durum.get("short") == "1H" and dk is not None and 1 <= dk <= DAKIKA_SINIRI and toplam_skor(mac) >= GOL_ESIGI
 
 
-def mesaj_olustur(event, goller):
-    comp = event["competitions"][0]
-    ev = next(c for c in comp["competitors"] if c["homeAway"] == "home")
-    dep = next(c for c in comp["competitors"] if c["homeAway"] == "away")
-    dakika = event["status"].get("displayClock", "")
-    gol_sayisi = len(goller) or toplam_skor(event)
-    gol_satiri = ", ".join(f"{dk}' {t}" for dk, t in goller) or "Gol dakikaları bilinmiyor (skor ve maç saatine göre)"
-    link = next((l["href"] for l in event.get("links", []) if "summary" in l.get("rel", [])), "")
+def mesaj_olustur(mac, goller):
+    t, g, durum, lig = mac["teams"], mac["goals"], mac["fixture"]["status"], mac["league"]
+    gol_sayisi = max(len(goller), GOL_ESIGI)
+    gol_satiri = ", ".join(f"{dk}' {t2}" for dk, t2 in goller) or "Gol dakikaları henüz gelmedi (skor ve maç saatine göre)"
+    ulke = f"{lig['country']}, " if lig.get("country") else ""
     return (
         f"⚽ İLK {DAKIKA_SINIRI} DK'DA {gol_sayisi} GOL!\n"
-        f"🏆 {lig_adi(event)}\n"
-        f"{ev['team']['displayName']} {ev['score']} - {dep['score']} {dep['team']['displayName']}\n"
+        f"🏆 {ulke}{lig.get('name', 'Bilinmeyen lig')}\n"
+        f"{t['home']['name']} {g.get('home') or 0} - {g.get('away') or 0} {t['away']['name']}\n"
         f"🥅 {gol_satiri}\n"
-        f"⏱ Şu an: {dakika}\n"
-        f"{link}"
-    ).strip()
+        f"⏱ Şu an: {durum.get('elapsed')}'"
+    )
 
 
 def tur(sent):
-    data = http_get_json(ESPN_URL)
-    canli = 0
-    kayitsiz = 0  # golu olup gol kaydi olmayan canli mac
-    kayitsiz_saatli = 0  # bunlardan mac saati gelenler (yedek kontrol bunlarda calisir)
-    for event in data.get("events", []):
-        if event.get("status", {}).get("type", {}).get("state") != "in":
-            continue
-        canli += 1
-        details = event["competitions"][0].get("details", [])
-        if toplam_skor(event) > 0 and not any(d.get("scoringPlay") for d in details):
+    maclar = api_get("fixtures", live="all").get("response", [])
+    kayitsiz = 0  # golu olup gol kaydi gelmemis canli mac
+    for mac in maclar:
+        kayitli = any(e.get("type") == "Goal" for e in mac.get("events") or [])
+        if toplam_skor(mac) > 0 and not kayitli:
             kayitsiz += 1
-            m = re.match(r"(\d+)", event["status"].get("displayClock", ""))
-            if m and int(m.group(1)) > 0:
-                kayitsiz_saatli += 1
-        eid = event["id"]
-        if eid in sent:
+        mid = f"af-{mac['fixture']['id']}"
+        if mid in sent:
             continue
-        goller = erken_goller(event)
-        if len(goller) >= GOL_ESIGI or skorla_erken_mi(event):
-            metin = mesaj_olustur(event, goller)
-            if telegram_gonder(metin):
-                sent[eid] = time.time()
+        goller = erken_goller(mac)
+        if len(goller) >= GOL_ESIGI or skorla_erken_mi(mac):
+            ad = f"{mac['teams']['home']['name']} - {mac['teams']['away']['name']}"
+            if telegram_gonder(mesaj_olustur(mac, goller)):
+                sent[mid] = time.time()
                 sent = sent_kaydet(sent)
-                log(f"BİLDİRİM: {event['name']}")
+                log(f"BİLDİRİM: {ad}")
             else:
-                log(f"Telegram hatasi: {event['name']}")
-    log(f"{canli} canli mac tarandi (gol kaydi olmayan: {kayitsiz}, saati gelen: {kayitsiz_saatli})")
+                log(f"Telegram hatasi: {ad}")
+    log(f"{len(maclar)} canli mac tarandi (gol kaydi olmayan: {kayitsiz})")
     return sent
 
 
+def hesap_durumu():
+    try:
+        d = api_get("status").get("response") or {}
+        log(f"Plan: {d.get('subscription', {}).get('plan')}, gunluk sinir: {d.get('requests', {}).get('limit_day')}")
+    except Exception as e:
+        log(f"Hesap durumu alinamadi: {e}")
+
+
 def main():
-    if not TOKEN or not CHAT_ID:
-        sys.exit("TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID gerekli")
+    if not API_KEY or not TOKEN or not CHAT_ID:
+        sys.exit("API_FOOTBALL_KEY, TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID gerekli")
     if os.environ.get("TEST_MESAJI") == "true":
         ok = telegram_gonder("✅ Gol Alarmı çalışıyor (test mesajı)")
         log(f"Test mesaji: {'gonderildi' if ok else 'HATA'}")
     sent = sent_yukle()
-    ligleri_yukle()
+    hesap_durumu()
     bitis = time.time() + LOOP_MINUTES * 60
+    hata_sayisi = 0
     while True:
         try:
             sent = tur(sent)
+            hata_sayisi = 0
         except Exception as e:  # ag hatasi vs. -> bir sonraki turda tekrar dene
+            hata_sayisi += 1
             log(f"Hata: {e}")
+            # Sessizce durmasin (kota doldu, abonelik bitti gibi)
+            if hata_sayisi == UYARI_TUR:
+                try:
+                    telegram_gonder(f"⚠️ Gol Alarmı {UYARI_TUR} turdur maçları okuyamıyor, bildirim gelmeyebilir.\n{e}")
+                except Exception as e2:
+                    log(f"Uyari gonderilemedi: {e2}")
         if time.time() + POLL_SECONDS >= bitis:
             break
         time.sleep(POLL_SECONDS)
