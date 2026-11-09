@@ -1,12 +1,14 @@
 # Gol Alarmı
 
-API-Football'un canlı verdiği bütün liglerde **ilk 20 dakikada 2 veya daha fazla gol** olan maçları Telegram'a bildirir. Her maç için tek bildirim gider.
+API-Football'un canlı verdiği bütün liglerde **ilk 12 dakikada 2 veya daha fazla gol** olan maçları, yalnızca gollü liglerde (son 60 günde maç başı en az 3,0 gol) Telegram'a bildirir. Her maç için tek bildirim gider.
 
 ## Nasıl çalışır
 - `gol_alarmi.py` dakikada bir API-Football'dan (`fixtures?live=all`) canlı maçları çeker. Günde ~1.440 istek harcar.
-- Gol dakikalarına bakar: 20' veya öncesinde atılan gol sayısı 2'ye ulaştıysa mesaj atar.
+- Gol dakikalarına bakar: 12' veya öncesinde atılan gol sayısı 2'ye ulaştıysa ve ligin gol ortalaması 3,0 veya üstüyse mesaj atar.
+- Lig ortalamaları her çalışma başında son 60 günün biten maçlarından hesaplanır (~60 istek). 10'dan az maçı olan lig bildirilmez.
+- Filtrenin nedeni: 20 dk kuralı günde ~40 (hafta sonu 75-89) bildirim üretiyordu. 60 günlük analizde filtre bildirimi ~5'te 1'e indirip ilk yarı 3+ golü %67'den %74'e çıkardı.
 - Kontrol geç kalsa bile (ör. 25. dakikada bakılsa) gol dakikalarına baktığı için kaçırmaz.
-- Gol kaydı gecikirse yedek kontrol çalışır: ilk yarıda, maç saati 1-20 arasındayken toplam skor 2 veya üstüyse bildirir.
+- Gol kaydı gecikirse yedek kontrol çalışır: ilk yarıda, maç saati 1-12 arasındayken toplam skor 2 veya üstüyse bildirir.
 - API art arda 30 tur okunamazsa (kota doldu, abonelik bitti gibi) Telegram'a bir kez uyarı gider.
 - GitHub Actions'ta ~5 saat 40 dk çalışır, sonra kendini yeniden başlatır. Böylece 7/24 açık kalır.
 
@@ -14,7 +16,8 @@ API-Football'un canlı verdiği bütün liglerde **ilk 20 dakikada 2 veya daha f
 | Değişken | Varsayılan | Anlamı |
 |---|---|---|
 | `GOL_ESIGI` | 2 | En az kaç gol |
-| `DAKIKA_SINIRI` | 20 | Kaçıncı dakikaya kadar |
+| `DAKIKA_SINIRI` | 12 | Kaçıncı dakikaya kadar |
+| `LIG_ORT_ESIGI` | 3.0 | Ligin son 60 gün maç başı gol ortalaması en az |
 | `POLL_SECONDS` | 60 | Kaç saniyede bir kontrol |
 
 ## Kurulum
