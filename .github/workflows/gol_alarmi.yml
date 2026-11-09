@@ -51,6 +51,7 @@ jobs:
           GOL_ESIGI: "2"
           DAKIKA_SINIRI: "12"
           LIG_ORT_ESIGI: "3.0"
+          ORAN_TETIK_TOKEN: ${{ secrets.ORAN_TETIK_TOKEN }}
           TEST_MESAJI: ${{ inputs.test }}
         run: python gol_alarmi.py
 

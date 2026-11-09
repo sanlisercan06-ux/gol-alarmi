@@ -41,6 +41,11 @@ LIG_GUN = int(os.environ.get("LIG_GUN", "60"))
 ASGARI_LIG_MAC = 10  # bundan az bitmis maci olan lig bildirilmez
 UYARI_TUR = 30  # bu kadar tur ust uste hata olursa Telegram'a haber ver
 LIG_ORT = None  # {lig id: ortalama}, calisma basinda bir kez hesaplanir
+# Oran listesini sabah baslatmak icin (oran-analiz deposunda Actions yazma izinli anahtar)
+LISTE_TOKEN = os.environ.get("ORAN_TETIK_TOKEN", "")
+LISTE_REPO = os.environ.get("LISTE_REPO", "sanlisercan06-ux/oran-analiz")
+LISTE_SAATI = int(os.environ.get("LISTE_SAATI", "9"))
+sonraki_tetik = 0
 
 
 def log(msg):
@@ -148,6 +153,33 @@ def mesaj_olustur(mac, goller):
     )
 
 
+def liste_tetikle(sent):
+    """Her gun LISTE_SAATI'nden sonra oran-analiz gunluk listesini bir kez baslatir.
+    GitHub'in kendi zamanlayicisi saatlerce gecikebildigi icin bu 7/24 calisan dongu kullanilir."""
+    global sonraki_tetik
+    if not LISTE_TOKEN or time.time() < sonraki_tetik:
+        return sent
+    simdi = time.gmtime(time.time() + 3 * 3600)  # TR saati
+    anahtar = "liste-" + time.strftime("%Y%m%d", simdi)
+    if simdi.tm_hour < LISTE_SAATI or anahtar in sent:
+        return sent
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{LISTE_REPO}/actions/workflows/gunluk.yml/dispatches",
+        data=b'{"ref": "main"}', method="POST",
+        headers={"Authorization": f"Bearer {LISTE_TOKEN}", "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "gol-alarmi"})
+    try:
+        with urllib.request.urlopen(req, timeout=20):
+            pass
+        sent[anahtar] = time.time()
+        sent = sent_kaydet(sent)
+        log("Gunluk liste baslatildi")
+    except Exception as e:  # anahtar suresi dolmus olabilir; 15 dk sonra tekrar
+        sonraki_tetik = time.time() + 900
+        log(f"Gunluk liste baslatilamadi: {e}")
+    return sent
+
+
 def tur(sent):
     global LIG_ORT
     if LIG_ORT is None:  # basarisiz olursa hata sayilir, sonraki turda tekrar denenir
@@ -200,6 +232,7 @@ def main():
     bitis = time.time() + LOOP_MINUTES * 60
     hata_sayisi = 0
     while True:
+        sent = liste_tetikle(sent)
         try:
             sent = tur(sent)
             hata_sayisi = 0
