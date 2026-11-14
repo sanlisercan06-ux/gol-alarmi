@@ -1,23 +1,9 @@
-"""GECICI: canli oran pazar adlarini listeler. Kontrol sonrasi silinecek."""
-import collections
-import json
-import os
-import urllib.request
+"""GECICI: canli IY 2,5 Ust oran okumasini gercek veride dener (Telegram yok). Kontrol sonrasi silinecek."""
+import gol_alarmi as g
 
-req = urllib.request.Request("https://v3.football.api-sports.io/odds/live",
-                             headers={"x-apisports-key": os.environ["API_FOOTBALL_KEY"]})
-with urllib.request.urlopen(req, timeout=60) as r:
-    d = json.loads(r.read().decode("utf-8"))
-print("errors:", d.get("errors"), "mac:", len(d.get("response", [])))
-adlar = collections.Counter()
-ornek = {}
-for m in d.get("response", []):
-    for b in m.get("odds", []):
-        adlar[(b.get("id"), b.get("name"))] += 1
-        if "half" in (b.get("name") or "").lower() and (b["id"], b["name"]) not in ornek:
-            ornek[(b["id"], b["name"])] = (m["fixture"], m.get("status"), b.get("values")[:6])
-for (i, n), c in adlar.most_common():
-    print(f"PAZAR | {i} | {n} | {c}")
-for k, v in ornek.items():
-    print("ORNEK |", k, "|", json.dumps(v, ensure_ascii=False)[:600])
-print("ILK MAC ANAHTARLARI |", list(d["response"][0].keys()) if d.get("response") else "-")
+maclar = g.api_get("fixtures", live="all").get("response", [])
+ilk = [m for m in maclar if m["fixture"]["status"]["short"] == "1H"]
+print("canli:", len(maclar), "ilk yari:", len(ilk))
+for m in ilk[:15]:
+    ad = f"{m['teams']['home']['name']} - {m['teams']['away']['name']}"
+    print("DENEME |", ad, "| dk", m["fixture"]["status"]["elapsed"], "| skor", m["goals"], "|", g.iy_orani(m["fixture"]["id"]))
