@@ -46,6 +46,11 @@ LISTE_TOKEN = os.environ.get("ORAN_TETIK_TOKEN", "")
 LISTE_REPO = os.environ.get("LISTE_REPO", "sanlisercan06-ux/oran-analiz")
 LISTE_SAATI = int(os.environ.get("LISTE_SAATI", "9"))
 sonraki_tetik = 0
+# Canli "Ilk Yari 2,5 Ust" orani (API-Football odds/live). Sadece kayit/olcum icin, tahmin degil.
+IY_PAZAR = 49  # "Over/Under (1st Half)"
+IY_BAREM = "2.5"
+ORAN_DENEME = 5  # oran askida/yoksa bu kadar tur daha dene
+bekleyen_oran = {}  # {fixture id: [ad, kalan deneme]}
 
 
 def log(msg):
@@ -137,7 +142,48 @@ def skorla_erken_mi(mac):
     return durum.get("short") == "1H" and dk is not None and 1 <= dk <= DAKIKA_SINIRI and toplam_skor(mac) >= GOL_ESIGI
 
 
-def mesaj_olustur(mac, goller):
+def iy_orani(fid):
+    """(oran, askida_mi) ya da None. Askidaysa oran yine dondurulur ama kesin sayilmaz."""
+    for m in api_get("odds/live", fixture=fid).get("response", []):
+        for b in m.get("odds", []):
+            if b.get("id") != IY_PAZAR:
+                continue
+            for v in b.get("values", []):
+                if v.get("value") == "Over" and str(v.get("handicap")) == IY_BAREM:
+                    try:
+                        return float(v["odd"]), bool(v.get("suspended"))
+                    except (TypeError, ValueError):
+                        return None
+    return None
+
+
+def oran_kaydet(fid, ad, mac=None):
+    """Orani alir ve loga yazar. Askida/yoksa bekleyen listesine koyar. Mesaj icin metin dondurur."""
+    try:
+        o = iy_orani(fid)
+    except Exception as e:
+        o = None
+        log(f"Oran alinamadi ({ad}): {e}")
+    if o and not o[1]:
+        bekleyen_oran.pop(fid, None)
+        ek = ""
+        if mac:
+            g = mac.get("goals") or {}
+            ek = f" | dk {mac['fixture']['status'].get('elapsed')} | skor {g.get('home') or 0}-{g.get('away') or 0}"
+        log(f"ORAN: {fid} | {ad}{ek} | IY2.5U {o[0]}")
+        return f"📈 Canlı İY 2,5 Üst oranı: {o[0]:.2f}".replace(".", ",")
+    kalan = bekleyen_oran.get(fid, [ad, ORAN_DENEME + 1])[1] - 1
+    if kalan > 0:
+        bekleyen_oran[fid] = [ad, kalan]
+    else:
+        bekleyen_oran.pop(fid, None)
+        log(f"ORAN YOK: {fid} | {ad}")
+    if o:
+        return f"📈 Canlı İY 2,5 Üst oranı: {o[0]:.2f} (şu an askıda)".replace(".", ",")
+    return "📈 Canlı İY 2,5 Üst oranı: şu an açık değil"
+
+
+def mesaj_olustur(mac, goller, oran_satiri=""):
     t, g, durum, lig = mac["teams"], mac["goals"], mac["fixture"]["status"], mac["league"]
     gol_sayisi = max(len(goller), GOL_ESIGI)
     gol_satiri = ", ".join(f"{dk}' {t2}" for dk, t2 in goller) or "Gol dakikaları henüz gelmedi (skor ve maç saatine göre)"
@@ -150,6 +196,7 @@ def mesaj_olustur(mac, goller):
         f"{t['home']['name']} {g.get('home') or 0} - {g.get('away') or 0} {t['away']['name']}\n"
         f"🥅 {gol_satiri}\n"
         f"⏱ Şu an: {durum.get('elapsed')}'"
+        + (f"\n{oran_satiri}" if oran_satiri else "")
     )
 
 
@@ -186,6 +233,9 @@ def tur(sent):
         LIG_ORT = lig_ortalamalari()
         log(f"{len(LIG_ORT)} lig ortalamasi hesaplandi, esigi gecen: {sum(v >= LIG_ORT_ESIGI for v in LIG_ORT.values())}")
     maclar = api_get("fixtures", live="all").get("response", [])
+    canli = {m["fixture"]["id"]: m for m in maclar}
+    for fid, (ad, _) in list(bekleyen_oran.items()):  # askidaki oranlari tekrar dene
+        oran_kaydet(fid, ad, canli.get(fid))
     kayitsiz = 0  # golu olup gol kaydi gelmemis canli mac
     elenen = 0  # kurali saglayip lig ortalamasi dusuk oldugu icin bildirilmeyen
     for mac in maclar:
@@ -203,10 +253,12 @@ def tur(sent):
                 elenen += 1
                 log(f"Elendi (lig ort. dusuk/bilinmiyor): {ad}")
                 continue
-            if telegram_gonder(mesaj_olustur(mac, goller)):
+            fid = mac["fixture"]["id"]
+            oran_satiri = oran_kaydet(fid, ad, mac)
+            if telegram_gonder(mesaj_olustur(mac, goller, oran_satiri)):
                 sent[mid] = time.time()
                 sent = sent_kaydet(sent)
-                log(f"BİLDİRİM: {ad}")
+                log(f"BİLDİRİM: {ad} (id {fid})")
             else:
                 log(f"Telegram hatasi: {ad}")
     log(f"{len(maclar)} canli mac tarandi (gol kaydi olmayan: {kayitsiz}, lig ort. ile elenen: {elenen})")
